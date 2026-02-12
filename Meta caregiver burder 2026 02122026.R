@@ -15,6 +15,28 @@ dat_all <- read_xlsx(file_path) |>
 out_dir <- dirname(file_path)
 
 
+#### 0b. Diagnostic report: why rows are excluded -----------------------
+
+dat_diagnostic <- dat_all |>
+  mutate(
+    excl_single_arm = design == "single_arm",
+    excl_no_ctrl_n  = is.na(n_ctrl) | n_ctrl <= 0,
+    excl_no_int_n   = is.na(n_int)  | n_int  <= 0,
+    excl_not_post   = follow_up_momento != "post" | is.na(follow_up_momento),
+    exclusion_reason = case_when(
+      excl_single_arm ~ "single_arm_design",
+      excl_no_ctrl_n  ~ "missing_or_zero_n_ctrl",
+      excl_no_int_n   ~ "missing_or_zero_n_int",
+      excl_not_post   ~ "not_post_follow_up",
+      TRUE            ~ "included"
+    )
+  )
+
+diag_file <- file.path(out_dir, "diagnostic_exclusion_report.csv")
+write.csv(dat_diagnostic, diag_file, row.names = FALSE)
+message("Saved diagnostic exclusion report: ", diag_file)
+
+
 #### 1. Filter: only controlled studies, POST measurements --------------
 
 dat_control_post <- dat_all |>
