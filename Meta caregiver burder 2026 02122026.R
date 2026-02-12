@@ -6,7 +6,7 @@ library(stringr)
 
 #### 0. Path and data import --------------------------------------------
 
-file_path <- "C:/Users/johna/Desktop/Meta-análisis Rosario/Hoja de extracción meta análisis rosario.xlsx"
+file_path <- "C:/Users/johna/Desktop/Research/Meta-análisis Rosario/Hoja de extracción meta análisis rosario.xlsx"
 
 dat_all <- read_xlsx(file_path) |>
   clean_names()
