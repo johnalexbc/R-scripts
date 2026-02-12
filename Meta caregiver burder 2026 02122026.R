@@ -15,6 +15,28 @@ dat_all <- read_xlsx(file_path) |>
 out_dir <- dirname(file_path)
 
 
+#### 0b. Diagnostic report: why rows are excluded -----------------------
+
+dat_diagnostic <- dat_all |>
+  mutate(
+    excl_single_arm = design == "single_arm",
+    excl_no_ctrl_n  = is.na(n_ctrl) | n_ctrl <= 0,
+    excl_no_int_n   = is.na(n_int)  | n_int  <= 0,
+    excl_not_post   = follow_up_momento != "post" | is.na(follow_up_momento),
+    exclusion_reason = case_when(
+      excl_single_arm ~ "single_arm_design",
+      excl_no_ctrl_n  ~ "missing_or_zero_n_ctrl",
+      excl_no_int_n   ~ "missing_or_zero_n_int",
+      excl_not_post   ~ "not_post_follow_up",
+      TRUE            ~ "included"
+    )
+  )
+
+diag_file <- file.path(out_dir, "diagnostic_exclusion_report.csv")
+write.csv(dat_diagnostic, diag_file, row.names = FALSE)
+message("Saved diagnostic exclusion report: ", diag_file)
+
+
 #### 1. Filter: only controlled studies, POST measurements --------------
 
 dat_control_post <- dat_all |>
@@ -325,7 +347,7 @@ for (g in outcome_groups) {
   save_plots_for_group(m, g, out_dir)
 }
 
-#### 11. Global forest: all outcomes, by study and instrument ----------
+#### 11. Global forest: prioritized outcome (1 per study) -------------
 
 # Column that contains the instrument / scale name
 instrument_col <- "outcome_scale"
@@ -336,22 +358,60 @@ if (!instrument_col %in% names(dat_control_post)) {
        "') is not in dat_control_post. Run names(dat_control_post) to see available columns.")
 }
 
-# 1) Build a long data frame: one row = study × instrument × outcome
+# Priority requested for the global plot: 1 outcome per study
+outcome_priority <- c(
+  "caregiver_burden_distress",
+  "caregiver_emotional_symptoms_mental_health",
+  "caregiver_quality_of_life",
+  "patient_neuropsychiatric_symptoms_behavior",
+  "caregiver_self_efficacy_competence"
+)
+
+# Region mapping for study-label shading
+region_to_group <- function(region_value) {
+  reg <- tolower(ifelse(is.na(region_value), "", region_value))
+  dplyr::case_when(
+    str_detect(reg, "asia") ~ "asia",
+    str_detect(reg, "latin") | str_detect(reg, "latam") ~ "latin_america",
+    str_detect(reg, "africa") ~ "africa",
+    TRUE ~ "other"
+  )
+}
+
+region_color_map <- c(
+  asia = "#1B9E77",
+  latin_america = "#7570B3",
+  africa = "#D95F02",
+  other = "#333333"
+)
+
+# 1) Keep exactly one prioritized outcome row per study-year
 dat_all_effects <- dat_control_post |>
   filter(
     !is.na(mean_int_harm), !is.na(mean_ctrl_harm),
     !is.na(sd_int), !is.na(sd_ctrl),
-    n_int  > 0, n_ctrl > 0
+    n_int  > 0, n_ctrl > 0,
+    !is.na(outcome_group),
+    outcome_group %in% outcome_priority
   ) |>
   mutate(
+    study_id          = paste0(tolower(d), "_", year),
+    outcome_rank      = match(outcome_group, outcome_priority),
     author_core      = gsub("[^a-z]+.*$", "", tolower(d)),
     author_label     = str_to_title(author_core),
     instrument_label = .data[[instrument_col]],
+    instrument_label = if_else(is.na(instrument_label) | instrument_label == "",
+                               "Unknown scale", instrument_label),
+    region_group     = region_to_group(region),
     studlab_instr    = paste0(author_label, " et al., ", year,
                               " (", instrument_label, ")")
-  )
+  ) |>
+  arrange(study_id, outcome_rank, instrument_label) |>
+  group_by(study_id) |>
+  slice(1) |>
+  ungroup()
 
-# 2) Meta-analysis using ALL study × instrument rows
+# 2) Meta-analysis using one prioritized row per study
 m_all <- metacont(
   n.e    = dat_all_effects$n_ctrl,
   mean.e = dat_all_effects$mean_ctrl_harm,
@@ -368,13 +428,15 @@ m_all <- metacont(
   prediction       = FALSE
 )
 
+study_label_colors <- unname(region_color_map[dat_all_effects$region_group])
+
 # 3) Plot height based on k
 k_all      <- length(m_all$TE)
 height_all <- max(6, 3.0 + 0.30 * k_all)
 
 forest_all_file <- file.path(out_dir, "forest_all_outcomes_instruments.tiff")
 
-message("Saving global forest with all outcomes → ", forest_all_file)
+message("Saving global forest with prioritized outcomes (1 per study) → ", forest_all_file)
 
 tiff(
   filename    = forest_all_file,
@@ -389,16 +451,16 @@ par(mar = c(5.5, 4.5, 4, 2))
 
 forest(
   m_all,
-  sortvar     = -m_all$TE,   # largest positive effects at the top
-  main        = "All outcomes by study and instrument",
+  main        = "Prioritized outcomes by study (1 outcome per study)",
   xlab        = "Standardized mean difference (Hedges g)",
   smlab       = "",
   leftcols    = c("studlab"),
   leftlabs    = c("Study (instrument)"),
-  overall     = FALSE,       # sin diamante global
+  overall     = FALSE,
   prediction  = FALSE,
   common      = FALSE,
   random      = TRUE,
+  col.study   = study_label_colors,
   
   print.I2       = TRUE,
   print.I2.ci    = FALSE,
